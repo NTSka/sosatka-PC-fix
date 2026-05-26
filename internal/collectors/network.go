@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -258,7 +257,7 @@ func powershellJSONRowsWithTimeout(ctx context.Context, command string, timeout 
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(commandCtx, "powershell.exe", "-NoProfile", "-Command", command).Output()
+	out, err := hiddenCommandContext(commandCtx, "powershell.exe", "-NoProfile", "-Command", command).Output()
 	if err != nil || len(out) == 0 {
 		return nil
 	}
@@ -288,7 +287,7 @@ func (a *Agent) collectCommandSnapshot(ctx context.Context, ts time.Time, metric
 	commandCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(commandCtx, name, args...).CombinedOutput()
+	out, err := hiddenCommandContext(commandCtx, name, args...).CombinedOutput()
 	details, _ := json.Marshal(map[string]any{
 		"command": append([]string{name}, args...),
 		"output":  strings.TrimSpace(string(out)),
@@ -370,7 +369,7 @@ func (a *Agent) collectGatewayProbe(ctx context.Context, ts time.Time, interface
 	defer cancel()
 
 	start := time.Now()
-	out, err := exec.CommandContext(probeCtx, "ping.exe", "-n", "1", "-w", "1000", "-S", sourceIP.String(), gateway).CombinedOutput()
+	out, err := hiddenCommandContext(probeCtx, "ping.exe", "-n", "1", "-w", "1000", "-S", sourceIP.String(), gateway).CombinedOutput()
 	latency := float64(time.Since(start).Microseconds()) / 1000
 	details := probeDetails(sourceIP, gateway, "gateway_ping")
 	if err != nil {
