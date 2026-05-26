@@ -6,8 +6,10 @@ export namespace config {
 	    network_status_interval_seconds: number;
 	    network_probe_interval_seconds: number;
 	    network_snapshot_interval_seconds: number;
+	    process_interval_seconds: number;
 	    collect_system: boolean;
 	    collect_network: boolean;
+	    collect_processes: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -20,8 +22,10 @@ export namespace config {
 	        this.network_status_interval_seconds = source["network_status_interval_seconds"];
 	        this.network_probe_interval_seconds = source["network_probe_interval_seconds"];
 	        this.network_snapshot_interval_seconds = source["network_snapshot_interval_seconds"];
+	        this.process_interval_seconds = source["process_interval_seconds"];
 	        this.collect_system = source["collect_system"];
 	        this.collect_network = source["collect_network"];
+	        this.collect_processes = source["collect_processes"];
 	    }
 	}
 

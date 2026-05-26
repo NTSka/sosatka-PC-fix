@@ -377,6 +377,48 @@ select {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.process-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.process-panel h2 {
+  margin-bottom: 12px;
+}
+
+.process-table {
+  overflow-x: auto;
+}
+
+.process-table table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.process-table th,
+.process-table td {
+  border-bottom: 1px solid #263244;
+  color: #dbe6f4;
+  font-size: 12px;
+  padding: 8px 6px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.process-table th {
+  color: #91a0b4;
+  font-weight: 600;
+}
+
+.process-table td:first-child {
+  color: #f3f7fc;
+  font-weight: 600;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .metric-panel h2 {
   margin-bottom: 12px;
 }
@@ -482,6 +524,10 @@ button:focus {
   }
 
   .health-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .process-grid {
     grid-template-columns: 1fr;
   }
 

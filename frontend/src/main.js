@@ -7,8 +7,10 @@ const els = {
   networkStatusInterval: document.querySelector("#networkStatusInterval"),
   networkProbeInterval: document.querySelector("#networkProbeInterval"),
   networkSnapshotInterval: document.querySelector("#networkSnapshotInterval"),
+  processInterval: document.querySelector("#processInterval"),
   collectSystem: document.querySelector("#collectSystem"),
   collectNetwork: document.querySelector("#collectNetwork"),
+  collectProcesses: document.querySelector("#collectProcesses"),
   refresh: document.querySelector("#refresh"),
   cpuChart: document.querySelector("#cpuChart"),
   cpuCoresChart: document.querySelector("#cpuCoresChart"),
@@ -55,10 +57,17 @@ const els = {
   memorySummary: document.querySelector("#memorySummary"),
   diskSummary: document.querySelector("#diskSummary"),
   gpuSummary: document.querySelector("#gpuSummary"),
+  processCpuSummary: document.querySelector("#processCpuSummary"),
+  processMemorySummary: document.querySelector("#processMemorySummary"),
+  processIOSummary: document.querySelector("#processIOSummary"),
+  processCpuTable: document.querySelector("#processCpuTable"),
+  processMemoryTable: document.querySelector("#processMemoryTable"),
+  processIOTable: document.querySelector("#processIOTable"),
   tabs: document.querySelectorAll("[data-tab]"),
   tabViews: {
     network: document.querySelector("#networkTab"),
     system: document.querySelector("#systemTab"),
+    processes: document.querySelector("#processesTab"),
     anomalies: document.querySelector("#anomaliesTab"),
   },
 };
@@ -85,8 +94,10 @@ async function loadSettings() {
   els.networkStatusInterval.value = settings.network_status_interval_seconds || settings.network_interval_seconds || 5;
   els.networkProbeInterval.value = settings.network_probe_interval_seconds || 15;
   els.networkSnapshotInterval.value = settings.network_snapshot_interval_seconds || 60;
+  els.processInterval.value = settings.process_interval_seconds || 15;
   els.collectSystem.checked = settings.collect_system;
   els.collectNetwork.checked = settings.collect_network;
+  els.collectProcesses.checked = settings.collect_processes ?? true;
 }
 
 async function saveSettings(event) {
@@ -98,8 +109,10 @@ async function saveSettings(event) {
       network_status_interval_seconds: Number(els.networkStatusInterval.value),
       network_probe_interval_seconds: Number(els.networkProbeInterval.value),
       network_snapshot_interval_seconds: Number(els.networkSnapshotInterval.value),
+      process_interval_seconds: Number(els.processInterval.value),
       collect_system: els.collectSystem.checked,
       collect_network: els.collectNetwork.checked,
+      collect_processes: els.collectProcesses.checked,
     });
     await loadSettings();
     await refreshData();
@@ -157,13 +170,15 @@ function syncTimelineRangeInputs() {
 
 async function loadCharts() {
   const range = timelineRange();
-  const [system, network, snapshots] = await Promise.all([
+  const [system, network, process, snapshots] = await Promise.all([
     SeriesRange("system", range.from.toISOString(), range.to.toISOString()),
     SeriesRange("network", range.from.toISOString(), range.to.toISOString()),
+    SeriesRange("process", range.from.toISOString(), range.to.toISOString()),
     RecentSnapshots(40),
   ]);
 
   renderSystemSummaries(system);
+  renderProcessSummaries(process);
   renderAnomalies(findAnomalies(system, network));
 
   drawInteractiveChart(els.cpuChart, els.cpuLegend, groupSeries(system.filter((point) => point.metric === "cpu_total"), systemSeriesLabel), {
@@ -348,6 +363,43 @@ function renderSystemSummaries(system) {
     metricRow("Shared", formatBytes(latest.gpu_shared_bytes)),
     metricRow("State", Number.isFinite(latest.gpu_utilization) ? "normal" : "no counter data"),
   ].join("");
+}
+
+function renderProcessSummaries(process) {
+  const cpuRows = topProcessCPURows(process);
+  const memoryRows = topProcessMemoryRows(process);
+  const ioRows = topProcessIORows(process);
+
+  els.processCpuSummary.innerHTML = [
+    metricRow("Tracked", String(countProcesses(process))),
+    metricRow("Top", cpuRows[0] ? `${cpuRows[0].name} (${formatPercent(cpuRows[0].cpu)})` : "-"),
+    metricRow("Samples", String(process.length)),
+  ].join("");
+
+  els.processMemorySummary.innerHTML = [
+    metricRow("Top", memoryRows[0] ? `${memoryRows[0].name} (${formatBytes(memoryRows[0].rss)})` : "-"),
+    metricRow("Total tracked", formatBytes(memoryRows.reduce((sum, row) => sum + row.rss, 0))),
+    metricRow("Rows", String(memoryRows.length)),
+  ].join("");
+
+  els.processIOSummary.innerHTML = [
+    metricRow("Top", ioRows[0] ? `${ioRows[0].name} (${formatRate(ioRows[0].total, "MB/s")})` : "-"),
+    metricRow("Read", formatRate(ioRows.reduce((sum, row) => sum + row.read, 0), "MB/s")),
+    metricRow("Write", formatRate(ioRows.reduce((sum, row) => sum + row.write, 0), "MB/s")),
+  ].join("");
+
+  els.processCpuTable.innerHTML = processTable(
+    ["Process", "PID", "CPU", "Threads"],
+    cpuRows.slice(0, 15).map((row) => [row.name, row.pid, formatPercent(row.cpu), formatCount(row.threads)]),
+  );
+  els.processMemoryTable.innerHTML = processTable(
+    ["Process", "PID", "RSS", "Memory %"],
+    memoryRows.slice(0, 15).map((row) => [row.name, row.pid, formatBytes(row.rss), formatPercent(row.memoryPercent)]),
+  );
+  els.processIOTable.innerHTML = processTable(
+    ["Process", "PID", "Read", "Write"],
+    ioRows.slice(0, 15).map((row) => [row.name, row.pid, formatRate(row.read, "MB/s"), formatRate(row.write, "MB/s")]),
+  );
 }
 
 function findAnomalies(system, network) {
@@ -668,6 +720,87 @@ function scaleSeriesValues(points, scale) {
     ...point,
     value: Number(point.value) * scale,
   }));
+}
+
+function countProcesses(points) {
+  return new Set(points.map((point) => processKey(point)).filter(Boolean)).size;
+}
+
+function topProcessCPURows(points) {
+  const cpuRates = toRateSeries(points.filter((point) => point.metric === "process_cpu_seconds"), 100);
+  const latestCPU = latestBySeries(cpuRates, processKey);
+  const latestThreads = latestBySeries(points.filter((point) => point.metric === "process_threads"), processKey);
+  return Array.from(latestCPU.values()).map((point) => {
+    const details = parseDetails(point.details);
+    const threads = latestThreads.get(processKey(point));
+    return {
+      cpu: Number(point.value),
+      name: processName(details),
+      pid: details.pid || "-",
+      threads: Number(threads?.value),
+    };
+  }).filter((row) => Number.isFinite(row.cpu)).sort((a, b) => b.cpu - a.cpu);
+}
+
+function topProcessMemoryRows(points) {
+  const latestRSS = latestBySeries(points.filter((point) => point.metric === "process_memory_rss_bytes"), processKey);
+  const latestPct = latestBySeries(points.filter((point) => point.metric === "process_memory_percent"), processKey);
+  return Array.from(latestRSS.values()).map((point) => {
+    const details = parseDetails(point.details);
+    const pct = latestPct.get(processKey(point));
+    return {
+      memoryPercent: Number(pct?.value),
+      name: processName(details),
+      pid: details.pid || "-",
+      rss: Number(point.value),
+    };
+  }).filter((row) => Number.isFinite(row.rss)).sort((a, b) => b.rss - a.rss);
+}
+
+function topProcessIORows(points) {
+  const readRates = latestBySeries(toRateSeries(points.filter((point) => point.metric === "process_io_read_bytes"), 1 / 1024 / 1024), processKey);
+  const writeRates = latestBySeries(toRateSeries(points.filter((point) => point.metric === "process_io_write_bytes"), 1 / 1024 / 1024), processKey);
+  const keys = new Set([...readRates.keys(), ...writeRates.keys()]);
+  return Array.from(keys).map((key) => {
+    const readPoint = readRates.get(key);
+    const writePoint = writeRates.get(key);
+    const source = readPoint || writePoint;
+    const details = parseDetails(source?.details);
+    const read = Number(readPoint?.value);
+    const write = Number(writePoint?.value);
+    return {
+      name: processName(details),
+      pid: details.pid || "-",
+      read: Number.isFinite(read) ? read : 0,
+      total: (Number.isFinite(read) ? read : 0) + (Number.isFinite(write) ? write : 0),
+      write: Number.isFinite(write) ? write : 0,
+    };
+  }).filter((row) => row.total > 0).sort((a, b) => b.total - a.total);
+}
+
+function processKey(point) {
+  const details = parseDetails(point.details);
+  return details.pid ? `${details.pid}|${details.name || ""}` : "";
+}
+
+function processName(details) {
+  return details.name || details.exe || `pid ${details.pid || "unknown"}`;
+}
+
+function processTable(headers, rows) {
+  if (rows.length === 0) {
+    return `<p class="empty-state">No process data for selected period</p>`;
+  }
+  return `
+    <table>
+      <thead>
+        <tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr>
+      </thead>
+      <tbody>
+        ${rows.map((row) => `<tr>${row.map((value) => `<td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}
+      </tbody>
+    </table>
+  `;
 }
 
 function summarizeSnapshots(samples, interfaceName, network) {

@@ -16,6 +16,7 @@ const (
 	defaultStatusIntervalSeconds  = 5
 	defaultProbeIntervalSeconds   = 15
 	defaultSnapshotIntervalSecond = 60
+	defaultProcessIntervalSeconds = 15
 	settingsKey                   = "settings"
 )
 
@@ -25,8 +26,10 @@ type Settings struct {
 	NetworkStatusIntervalSeconds   int  `json:"network_status_interval_seconds"`
 	NetworkProbeIntervalSeconds    int  `json:"network_probe_interval_seconds"`
 	NetworkSnapshotIntervalSeconds int  `json:"network_snapshot_interval_seconds"`
+	ProcessIntervalSeconds         int  `json:"process_interval_seconds"`
 	CollectSystem                  bool `json:"collect_system"`
 	CollectNetwork                 bool `json:"collect_network"`
+	CollectProcesses               bool `json:"collect_processes"`
 }
 
 type Manager struct {
@@ -56,6 +59,13 @@ func NewManager(store *storage.Store) (*Manager, error) {
 	if err := json.Unmarshal([]byte(loaded), &settings); err != nil {
 		return nil, err
 	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(loaded), &raw); err != nil {
+		return nil, err
+	}
+	if _, ok := raw["collect_processes"]; !ok {
+		settings.CollectProcesses = true
+	}
 
 	normalized, err := Normalize(settings)
 	if err != nil {
@@ -73,8 +83,10 @@ func Defaults() Settings {
 		NetworkStatusIntervalSeconds:   defaultStatusIntervalSeconds,
 		NetworkProbeIntervalSeconds:    defaultProbeIntervalSeconds,
 		NetworkSnapshotIntervalSeconds: defaultSnapshotIntervalSecond,
+		ProcessIntervalSeconds:         defaultProcessIntervalSeconds,
 		CollectSystem:                  true,
 		CollectNetwork:                 true,
+		CollectProcesses:               true,
 	}
 }
 
@@ -95,6 +107,9 @@ func Normalize(settings Settings) (Settings, error) {
 	if settings.NetworkSnapshotIntervalSeconds == 0 {
 		settings.NetworkSnapshotIntervalSeconds = defaultSnapshotIntervalSecond
 	}
+	if settings.ProcessIntervalSeconds == 0 {
+		settings.ProcessIntervalSeconds = defaultProcessIntervalSeconds
+	}
 	if settings.NetworkIntervalSeconds == 0 {
 		settings.NetworkIntervalSeconds = settings.NetworkStatusIntervalSeconds
 	}
@@ -110,6 +125,9 @@ func Normalize(settings Settings) (Settings, error) {
 	}
 	if settings.NetworkSnapshotIntervalSeconds < minIntervalSeconds || settings.NetworkSnapshotIntervalSeconds > maxIntervalSeconds {
 		return Settings{}, errors.New("network snapshot interval must be between 1 and 3600 seconds")
+	}
+	if settings.ProcessIntervalSeconds < minIntervalSeconds || settings.ProcessIntervalSeconds > maxIntervalSeconds {
+		return Settings{}, errors.New("process interval must be between 1 and 3600 seconds")
 	}
 	settings.NetworkIntervalSeconds = settings.NetworkStatusIntervalSeconds
 

@@ -23,6 +23,7 @@ func (a *Agent) Run(ctx context.Context) {
 	networkStatusKick := make(chan struct{}, 1)
 	networkProbeKick := make(chan struct{}, 1)
 	networkSnapshotKick := make(chan struct{}, 1)
+	processKick := make(chan struct{}, 1)
 
 	go a.runLoop(ctx, "system", a.settings.Watch(), systemKick, func(settings config.Settings) bool {
 		return settings.CollectSystem
@@ -48,10 +49,17 @@ func (a *Agent) Run(ctx context.Context) {
 		return time.Duration(settings.NetworkSnapshotIntervalSeconds) * time.Second
 	}, a.collectNetworkSnapshot)
 
+	go a.runLoop(ctx, "process", a.settings.Watch(), processKick, func(settings config.Settings) bool {
+		return settings.CollectProcesses
+	}, func(settings config.Settings) time.Duration {
+		return time.Duration(settings.ProcessIntervalSeconds) * time.Second
+	}, a.collectProcesses)
+
 	systemKick <- struct{}{}
 	networkStatusKick <- struct{}{}
 	networkProbeKick <- struct{}{}
 	networkSnapshotKick <- struct{}{}
+	processKick <- struct{}{}
 }
 
 func (a *Agent) runLoop(

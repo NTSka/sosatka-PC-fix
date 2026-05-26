@@ -34,6 +34,10 @@
             Network snapshots, sec
             <input id="networkSnapshotInterval" type="number" min="1" max="3600" step="1">
           </label>
+          <label>
+            Processes, sec
+            <input id="processInterval" type="number" min="1" max="3600" step="1">
+          </label>
           <label class="check">
             <input id="collectSystem" type="checkbox">
             Собирать системные метрики
@@ -41,6 +45,10 @@
           <label class="check">
             <input id="collectNetwork" type="checkbox">
             Собирать сетевые метрики
+          </label>
+          <label class="check">
+            <input id="collectProcesses" type="checkbox">
+            Собирать метрики процессов
           </label>
           <button type="submit">Сохранить</button>
         </form>
@@ -69,6 +77,7 @@
       <nav class="tabs" aria-label="Sections">
         <button class="tab active" type="button" data-tab="network">Network</button>
         <button class="tab" type="button" data-tab="system">System</button>
+        <button class="tab" type="button" data-tab="processes">Processes</button>
         <button class="tab" type="button" data-tab="anomalies">Anomalies <span id="anomalyCount" class="tab-badge">0</span></button>
       </nav>
 
@@ -238,6 +247,38 @@
             </div>
             <canvas id="gpuMemoryChart" width="900" height="280"></canvas>
             <div id="gpuMemoryLegend" class="legend"></div>
+          </article>
+        </section>
+      </section>
+
+      <section id="processesTab" class="tab-view">
+        <section class="health-grid">
+          <article class="panel metric-panel">
+            <h2>Process CPU</h2>
+            <div id="processCpuSummary" class="metric-list"></div>
+          </article>
+          <article class="panel metric-panel">
+            <h2>Process memory</h2>
+            <div id="processMemorySummary" class="metric-list"></div>
+          </article>
+          <article class="panel metric-panel">
+            <h2>Process IO</h2>
+            <div id="processIOSummary" class="metric-list"></div>
+          </article>
+        </section>
+
+        <section class="process-grid">
+          <article class="panel process-panel">
+            <h2>Top CPU</h2>
+            <div id="processCpuTable" class="process-table"></div>
+          </article>
+          <article class="panel process-panel">
+            <h2>Top memory</h2>
+            <div id="processMemoryTable" class="process-table"></div>
+          </article>
+          <article class="panel process-panel">
+            <h2>Top disk IO</h2>
+            <div id="processIOTable" class="process-table"></div>
           </article>
         </section>
       </section>
