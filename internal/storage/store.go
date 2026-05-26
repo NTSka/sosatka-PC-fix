@@ -205,15 +205,19 @@ func scanSamples(rows *sql.Rows) ([]Sample, error) {
 }
 
 func (s *Store) Series(ctx context.Context, since time.Time, kind string) ([]SeriesPoint, error) {
+	return s.SeriesRange(ctx, since, time.Now().UTC(), kind)
+}
+
+func (s *Store) SeriesRange(ctx context.Context, from time.Time, to time.Time, kind string) ([]SeriesPoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	query := `
 SELECT timestamp, kind, COALESCE(interface_id, ''), metric, value, COALESCE(unit, ''), COALESCE(details, '')
 FROM samples
-WHERE timestamp >= ? AND value IS NOT NULL
+WHERE timestamp >= ? AND timestamp <= ? AND value IS NOT NULL
 `
-	args := []any{since}
+	args := []any{from, to}
 	if kind != "" {
 		query += ` AND kind = ?`
 		args = append(args, kind)

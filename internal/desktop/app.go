@@ -73,3 +73,21 @@ func (a *App) Series(kind string, minutes int) ([]storage.SeriesPoint, error) {
 	}
 	return a.store.Series(context.Background(), time.Now().UTC().Add(-time.Duration(minutes)*time.Minute), kind)
 }
+
+func (a *App) SeriesRange(kind string, from string, to string) ([]storage.SeriesPoint, error) {
+	start, err := time.Parse(time.RFC3339, from)
+	if err != nil {
+		return nil, err
+	}
+	end, err := time.Parse(time.RFC3339, to)
+	if err != nil {
+		return nil, err
+	}
+	if end.Before(start) {
+		start, end = end, start
+	}
+	if end.Sub(start) > 24*time.Hour {
+		start = end.Add(-24 * time.Hour)
+	}
+	return a.store.SeriesRange(context.Background(), start.UTC(), end.UTC(), kind)
+}

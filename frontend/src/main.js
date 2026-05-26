@@ -1,5 +1,5 @@
 import "./styles.css";
-import { GetSettings, RecentSnapshots, Series, SetSettings } from "../wailsjs/go/desktop/App";
+import { GetSettings, RecentSnapshots, SeriesRange, SetSettings } from "../wailsjs/go/desktop/App";
 
 const els = {
   form: document.querySelector("#settings"),
@@ -40,20 +40,17 @@ const els = {
   dnsLegend: document.querySelector("#dnsLegend"),
   httpLegend: document.querySelector("#httpLegend"),
   httpBreakdownLegend: document.querySelector("#httpBreakdownLegend"),
-  systemWindow: document.querySelector("#systemWindow"),
-  networkWindow: document.querySelector("#networkWindow"),
-  gatewayWindow: document.querySelector("#gatewayWindow"),
-  trafficWindow: document.querySelector("#trafficWindow"),
-  errorsWindow: document.querySelector("#errorsWindow"),
-  tcpWindow: document.querySelector("#tcpWindow"),
-  dnsWindow: document.querySelector("#dnsWindow"),
-  httpWindow: document.querySelector("#httpWindow"),
-  httpBreakdownWindow: document.querySelector("#httpBreakdownWindow"),
+  timelineWindow: document.querySelector("#timelineWindow"),
+  timelineFrom: document.querySelector("#timelineFrom"),
+  timelineTo: document.querySelector("#timelineTo"),
   interfaceSelect: document.querySelector("#interfaceSelect"),
   interfaceList: document.querySelector("#interfaceList"),
   trafficSummary: document.querySelector("#trafficSummary"),
   reliabilitySummary: document.querySelector("#reliabilitySummary"),
   configSummary: document.querySelector("#configSummary"),
+  anomalyCount: document.querySelector("#anomalyCount"),
+  anomalyList: document.querySelector("#anomalyList"),
+  showIgnoredAnomalies: document.querySelector("#showIgnoredAnomalies"),
   cpuSummary: document.querySelector("#cpuSummary"),
   memorySummary: document.querySelector("#memorySummary"),
   diskSummary: document.querySelector("#diskSummary"),
@@ -62,6 +59,7 @@ const els = {
   tabViews: {
     network: document.querySelector("#networkTab"),
     system: document.querySelector("#systemTab"),
+    anomalies: document.querySelector("#anomaliesTab"),
   },
 };
 
@@ -78,6 +76,8 @@ const chartTheme = {
 };
 let selectedInterface = "";
 const chartStates = new WeakMap();
+const ignoredAnomalies = loadIgnoredAnomalies();
+let currentAnomalies = [];
 
 async function loadSettings() {
   const settings = await GetSettings();
@@ -112,24 +112,59 @@ async function refreshData() {
   await loadCharts();
 }
 
+function timelineRange() {
+  const selected = els.timelineWindow.value;
+  if (selected === "custom") {
+    const from = parseLocalDateTime(els.timelineFrom.value) || new Date(Date.now() - 30 * 60 * 1000);
+    const to = parseLocalDateTime(els.timelineTo.value) || new Date();
+    return normalizeRange(from, to);
+  }
+  const minutes = Number(selected) || 30;
+  return { from: new Date(Date.now() - minutes * 60 * 1000), to: new Date() };
+}
+
+function normalizeRange(from, to) {
+  if (to.getTime() < from.getTime()) {
+    return { from: to, to: from };
+  }
+  return { from, to };
+}
+
+function parseLocalDateTime(value) {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatLocalDateTime(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function syncTimelineRangeInputs() {
+  const custom = els.timelineWindow.value === "custom";
+  els.timelineFrom.hidden = !custom;
+  els.timelineTo.hidden = !custom;
+  if (custom && (!els.timelineFrom.value || !els.timelineTo.value)) {
+    const to = new Date();
+    const from = new Date(to.getTime() - 30 * 60 * 1000);
+    els.timelineFrom.value = formatLocalDateTime(from);
+    els.timelineTo.value = formatLocalDateTime(to);
+  }
+}
+
 async function loadCharts() {
-  const networkWindow = Math.max(
-    Number(els.networkWindow.value),
-    Number(els.gatewayWindow.value),
-    Number(els.trafficWindow.value),
-    Number(els.errorsWindow.value),
-    Number(els.tcpWindow.value),
-    Number(els.dnsWindow.value),
-    Number(els.httpWindow.value),
-    Number(els.httpBreakdownWindow.value),
-  );
+  const range = timelineRange();
   const [system, network, snapshots] = await Promise.all([
-    Series("system", Number(els.systemWindow.value)),
-    Series("network", networkWindow),
+    SeriesRange("system", range.from.toISOString(), range.to.toISOString()),
+    SeriesRange("network", range.from.toISOString(), range.to.toISOString()),
     RecentSnapshots(40),
   ]);
 
   renderSystemSummaries(system);
+  renderAnomalies(findAnomalies(system, network));
 
   drawInteractiveChart(els.cpuChart, els.cpuLegend, groupSeries(system.filter((point) => point.metric === "cpu_total"), systemSeriesLabel), {
     min: 0,
@@ -167,27 +202,27 @@ async function loadCharts() {
     suffix: " GB",
   });
 
-  const interfacePoints = filterByMetricAndWindow(network, "interface_up", Number(els.networkWindow.value));
+  const interfacePoints = filterByMetric(network, "interface_up");
   const interfaces = buildInterfaceSummaries(interfacePoints, network);
   renderInterfaceSelector(interfaces);
   renderHealthSummaries(network, snapshots);
 
-  const gatewayPoints = filterByInterface(filterByMetricAndWindow(network, "gateway_ping_ms", Number(els.gatewayWindow.value)), selectedInterface);
+  const gatewayPoints = filterByInterface(filterByMetric(network, "gateway_ping_ms"), selectedInterface);
   drawInteractiveChart(els.gatewayChart, els.gatewayLegend, groupSeries(gatewayPoints, latencyLabel), {
     min: 0,
     scale: "auto-log",
     suffix: " ms",
   });
 
-  const trafficPoints = filterByInterface(filterByMetricAndWindow(network, "bytes_sent", Number(els.trafficWindow.value)), selectedInterface)
-    .concat(filterByInterface(filterByMetricAndWindow(network, "bytes_recv", Number(els.trafficWindow.value)), selectedInterface));
+  const trafficPoints = filterByInterface(filterByMetric(network, "bytes_sent"), selectedInterface)
+    .concat(filterByInterface(filterByMetric(network, "bytes_recv"), selectedInterface));
   drawInteractiveChart(els.trafficChart, els.trafficLegend, groupSeries(toRateSeries(trafficPoints, 1 / 1024), trafficLabel), {
     min: 0,
     suffix: " KB/s",
   });
 
   const errorPoints = ["errin", "errout", "dropin", "dropout"].flatMap((metric) =>
-    filterByInterface(filterByMetricAndWindow(network, metric, Number(els.errorsWindow.value)), selectedInterface),
+    filterByInterface(filterByMetric(network, metric), selectedInterface),
   );
   drawInteractiveChart(els.errorsChart, els.errorsLegend, groupSeries(toRateSeries(errorPoints, 1), (p) => p.metric), {
     min: 0,
@@ -203,21 +238,21 @@ async function loadCharts() {
     valueFormatter: (value) => value >= 0.5 ? "up" : "down",
   });
 
-  const tcpPoints = filterByInterface(filterByMetricAndWindow(network, "tcp_connect_ms", Number(els.tcpWindow.value)), selectedInterface);
+  const tcpPoints = filterByInterface(filterByMetric(network, "tcp_connect_ms"), selectedInterface);
   drawInteractiveChart(els.tcpChart, els.tcpLegend, groupSeries(tcpPoints, latencyLabel), {
     min: 0,
     scale: "auto-log",
     suffix: " ms",
   });
 
-  const dnsPoints = filterByInterface(filterByMetricAndWindow(network, "dns_query_ms", Number(els.dnsWindow.value)), selectedInterface);
+  const dnsPoints = filterByInterface(filterByMetric(network, "dns_query_ms"), selectedInterface);
   drawInteractiveChart(els.dnsChart, els.dnsLegend, groupSeries(dnsPoints, latencyLabel), {
     min: 0,
     scale: "auto-log",
     suffix: " ms",
   });
 
-  const httpPoints = filterByInterface(filterByMetricAndWindow(network, "http_request_ms", Number(els.httpWindow.value)), selectedInterface);
+  const httpPoints = filterByInterface(filterByMetric(network, "http_request_ms"), selectedInterface);
   drawInteractiveChart(els.httpChart, els.httpLegend, groupSeries(httpPoints, latencyLabel), {
     min: 0,
     scale: "auto-log",
@@ -225,7 +260,7 @@ async function loadCharts() {
   });
 
   const httpBreakdownPoints = ["http_tcp_ms", "http_tls_ms", "http_ttfb_ms", "http_total_ms"].flatMap((metric) =>
-    filterByInterface(filterByMetricAndWindow(network, metric, Number(els.httpBreakdownWindow.value)), selectedInterface),
+    filterByInterface(filterByMetric(network, metric), selectedInterface),
   );
   drawInteractiveChart(els.httpBreakdownChart, els.httpBreakdownLegend, groupSeries(httpBreakdownPoints, httpBreakdownLabel), {
     min: 0,
@@ -313,6 +348,190 @@ function renderSystemSummaries(system) {
     metricRow("Shared", formatBytes(latest.gpu_shared_bytes)),
     metricRow("State", Number.isFinite(latest.gpu_utilization) ? "normal" : "no counter data"),
   ].join("");
+}
+
+function findAnomalies(system, network) {
+  const anomalies = [];
+  const latestSystem = latestValues(system);
+  addThresholdAnomaly(anomalies, "cpu", "CPU total is high", latestSystem.cpu_total, 85, 95, "%");
+  addThresholdAnomaly(anomalies, "memory", "Memory pressure is high", latestSystem.memory_used, 85, 92, "%");
+  addThresholdAnomaly(anomalies, "disk", "Disk C: is almost full", latestSystem.disk_c_used, 85, 95, "%");
+  addThresholdAnomaly(anomalies, "gpu", "GPU utilization is high", latestSystem.gpu_utilization, 85, 95, "%");
+
+  const coreValues = latestCoreValues(system);
+  if (coreValues.length > 0) {
+    const peakCore = Math.max(...coreValues);
+    addThresholdAnomaly(anomalies, "cpu", "One CPU core is saturated", peakCore, 90, 98, "%");
+  }
+
+  const diskRates = latestSystemRates(system);
+  addThresholdAnomaly(anomalies, "disk", "Disk read throughput is high", diskRates.disk_io_read_bytes, 80, 180, " MB/s");
+  addThresholdAnomaly(anomalies, "disk", "Disk write throughput is high", diskRates.disk_io_write_bytes, 80, 180, " MB/s");
+
+  for (const metric of ["gateway_ping_ms", "tcp_connect_ms", "dns_query_ms", "http_request_ms"]) {
+    for (const item of seriesGroups(network.filter((point) => point.metric === metric), anomalyNetworkLabel)) {
+      const values = item.points.map((point) => Number(point.value)).filter(Number.isFinite).filter((value) => value > 0).sort((a, b) => a - b);
+      if (values.length < 6) {
+        continue;
+      }
+      const p90 = percentile(values, 0.9);
+      const max = values.at(-1);
+      if (max >= 1000 || (max >= 200 && p90 > 0 && max / p90 >= 5)) {
+        anomalies.push({
+          category: "network",
+          detail: `${item.label}: max ${formatMs(max)}, p90 ${formatMs(p90)}`,
+          severity: max >= 1000 ? "critical" : "warning",
+          title: `${metricLabel(metric)} latency spike`,
+        });
+      }
+    }
+  }
+
+  for (const metric of ["gateway_ping_success", "tcp_connect_success", "dns_query_success", "http_request_success"]) {
+    for (const item of seriesGroups(network.filter((point) => point.metric === metric), anomalyNetworkLabel)) {
+      const values = item.points.map((point) => Number(point.value)).filter(Number.isFinite);
+      if (values.length < 4) {
+        continue;
+      }
+      const ok = values.filter((value) => value >= 0.5).length;
+      const rate = ok / values.length;
+      if (rate < 0.95) {
+        anomalies.push({
+          category: "network",
+          detail: `${item.label}: ${Math.round(rate * 100)}% success over ${values.length} probes`,
+          severity: rate < 0.8 ? "critical" : "warning",
+          title: `${metricLabel(metric)} failures`,
+        });
+      }
+    }
+  }
+
+  const latestInterfaceState = latestBySeries(network.filter((point) => point.metric === "interface_up"), (point) => point.interface_id || "unknown");
+  for (const [name, point] of latestInterfaceState) {
+    if (Number(point.value) < 0.5) {
+      anomalies.push({
+        category: "network",
+        detail: `${name} is down`,
+        severity: "warning",
+        title: "Network interface down",
+      });
+    }
+  }
+
+  const networkRates = ["errin", "errout", "dropin", "dropout"].flatMap((metric) => toRateSeries(network.filter((point) => point.metric === metric), 1));
+  const badRates = networkRates.filter((point) => Number(point.value) > 0);
+  if (badRates.length > 0) {
+    const worst = badRates.sort((a, b) => Number(b.value) - Number(a.value))[0];
+    anomalies.push({
+      category: "network",
+      detail: `${worst.interface_id || "unknown"} ${worst.metric}: ${formatRate(worst.value, "/s")}`,
+      severity: Number(worst.value) >= 5 ? "critical" : "warning",
+      title: "Network errors or drops detected",
+    });
+  }
+
+  return anomalies.sort((a, b) => severityRank(b.severity) - severityRank(a.severity)).slice(0, 12);
+}
+
+function renderAnomalies(anomalies) {
+  currentAnomalies = anomalies.map((item) => ({ ...item, key: anomalyKey(item), ignored: ignoredAnomalies.has(anomalyKey(item)) }));
+  const active = currentAnomalies.filter((item) => !item.ignored);
+  const visible = els.showIgnoredAnomalies.checked ? currentAnomalies : active;
+
+  els.anomalyCount.textContent = String(active.length);
+  els.anomalyCount.className = `tab-badge ${active.some((item) => item.severity === "critical") ? "critical" : active.length ? "warning" : "ok"}`;
+  if (visible.length === 0) {
+    els.anomalyList.innerHTML = `<div class="empty-state">${els.showIgnoredAnomalies.checked ? "No anomalies in the selected window" : "No active anomalies in the selected window"}</div>`;
+    return;
+  }
+  els.anomalyList.innerHTML = visible.map((item) => `
+    <div class="anomaly-item ${escapeHtml(item.severity)} ${item.ignored ? "ignored" : ""}">
+      <span class="anomaly-severity">${escapeHtml(item.severity)}</span>
+      <div>
+        <strong>${escapeHtml(item.title)}</strong>
+        <p>${escapeHtml(item.detail)}</p>
+      </div>
+      <button class="anomaly-action" type="button" data-anomaly-action="${item.ignored ? "restore" : "ignore"}" data-anomaly-key="${escapeHtml(item.key)}">
+        ${item.ignored ? "Restore" : "Ignore"}
+      </button>
+    </div>
+  `).join("");
+}
+
+function anomalyKey(item) {
+  return `${item.category}|${item.title}|${item.detail}`;
+}
+
+function loadIgnoredAnomalies() {
+  try {
+    const stored = JSON.parse(localStorage.getItem("ignoredAnomalies") || "[]");
+    return new Set(Array.isArray(stored) ? stored : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveIgnoredAnomalies() {
+  localStorage.setItem("ignoredAnomalies", JSON.stringify(Array.from(ignoredAnomalies)));
+}
+
+function toggleIgnoredAnomaly(action, key) {
+  if (!key) {
+    return;
+  }
+  if (action === "restore") {
+    ignoredAnomalies.delete(key);
+  } else {
+    ignoredAnomalies.add(key);
+  }
+  saveIgnoredAnomalies();
+  renderAnomalies(currentAnomalies);
+}
+
+function addThresholdAnomaly(anomalies, category, title, value, warning, critical, suffix) {
+  if (!Number.isFinite(value) || value < warning) {
+    return;
+  }
+  anomalies.push({
+    category,
+    detail: `${formatAnomalyValue(value, suffix)} current, warning >= ${formatAnomalyValue(warning, suffix)}, critical >= ${formatAnomalyValue(critical, suffix)}`,
+    severity: value >= critical ? "critical" : "warning",
+    title,
+  });
+}
+
+function formatAnomalyValue(value, suffix) {
+  const precision = Math.abs(value) >= 100 ? 0 : 1;
+  return `${value.toFixed(precision)}${suffix}`;
+}
+
+function severityRank(severity) {
+  return severity === "critical" ? 2 : severity === "warning" ? 1 : 0;
+}
+
+function seriesGroups(points, labelFor) {
+  const groups = new Map();
+  for (const point of points) {
+    const label = labelFor(point);
+    if (!groups.has(label)) {
+      groups.set(label, []);
+    }
+    groups.get(label).push(point);
+  }
+  return Array.from(groups, ([label, grouped]) => ({ label, points: grouped }));
+}
+
+function latestBySeries(points, labelFor) {
+  const latest = new Map();
+  for (const point of points) {
+    const label = labelFor(point);
+    const time = new Date(point.timestamp).getTime();
+    const current = latest.get(label);
+    if (!current || time > current.time) {
+      latest.set(label, { ...point, time });
+    }
+  }
+  return latest;
 }
 
 function metricStats(points, metric) {
@@ -661,9 +880,8 @@ function hostLabel(target) {
   }
 }
 
-function filterByMetricAndWindow(points, metric, minutes) {
-  const since = Date.now() - minutes * 60 * 1000;
-  return points.filter((point) => point.metric === metric && new Date(point.timestamp).getTime() >= since);
+function filterByMetric(points, metric) {
+  return points.filter((point) => point.metric === metric);
 }
 
 function filterByInterface(points, interfaceID) {
@@ -792,6 +1010,14 @@ function metricLabel(metric) {
     gpu_engine_utilization: "GPU engine",
     gpu_dedicated_bytes: "Dedicated",
     gpu_shared_bytes: "Shared",
+    gateway_ping_ms: "Gateway",
+    tcp_connect_ms: "TCP",
+    dns_query_ms: "DNS",
+    http_request_ms: "HTTP",
+    gateway_ping_success: "Gateway",
+    tcp_connect_success: "TCP",
+    dns_query_success: "DNS",
+    http_request_success: "HTTP",
     }[metric] || metric;
 }
 
@@ -832,6 +1058,14 @@ function latencyLabel(point) {
     return target;
   }
   return `${point.interface_id || "unknown"} -> ${target}`;
+}
+
+function anomalyNetworkLabel(point) {
+  const details = parseDetails(point.details);
+  const iface = point.interface_id || "unknown interface";
+  const source = details.source_ip ? ` (${details.source_ip})` : "";
+  const target = details.target || details.gateway || point.metric;
+  return `${iface}${source} -> ${target}`;
 }
 
 function parseDetails(details) {
@@ -1281,13 +1515,20 @@ function escapeHtml(value) {
 
 els.form.addEventListener("submit", saveSettings);
 els.refresh.addEventListener("click", refreshData);
-els.systemWindow.addEventListener("change", loadCharts);
-els.networkWindow.addEventListener("change", loadCharts);
-els.gatewayWindow.addEventListener("change", loadCharts);
-els.tcpWindow.addEventListener("change", loadCharts);
-els.dnsWindow.addEventListener("change", loadCharts);
-els.httpWindow.addEventListener("change", loadCharts);
-els.httpBreakdownWindow.addEventListener("change", loadCharts);
+els.timelineWindow.addEventListener("change", () => {
+  syncTimelineRangeInputs();
+  loadCharts();
+});
+els.timelineFrom.addEventListener("change", loadCharts);
+els.timelineTo.addEventListener("change", loadCharts);
+els.showIgnoredAnomalies.addEventListener("change", () => renderAnomalies(currentAnomalies));
+els.anomalyList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-anomaly-action]");
+  if (!button) {
+    return;
+  }
+  toggleIgnoredAnomaly(button.dataset.anomalyAction, button.dataset.anomalyKey);
+});
 els.interfaceSelect.addEventListener("change", () => {
   selectedInterface = els.interfaceSelect.value;
   loadCharts();
@@ -1308,6 +1549,7 @@ function setActiveTab(name) {
   loadCharts();
 }
 
+syncTimelineRangeInputs();
 loadSettings();
 refreshData();
 setInterval(refreshData, 5000);

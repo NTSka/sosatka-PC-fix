@@ -22,6 +22,10 @@ export function Series(arg1, arg2) {
   return window['go']['desktop']['App']['Series'](arg1, arg2);
 }
 
+export function SeriesRange(arg1, arg2, arg3) {
+  return window['go']['desktop']['App']['SeriesRange'](arg1, arg2, arg3);
+}
+
 export function SetSettings(arg1) {
   return window['go']['desktop']['App']['SetSettings'](arg1);
 }

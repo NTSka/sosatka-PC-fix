@@ -14,6 +14,8 @@ export function RecentSnapshots(arg1:number):Promise<Array<storage.Sample>>;
 
 export function Series(arg1:string,arg2:number):Promise<Array<storage.SeriesPoint>>;
 
+export function SeriesRange(arg1:string,arg2:string,arg3:string):Promise<Array<storage.SeriesPoint>>;
+
 export function SetSettings(arg1:config.Settings):Promise<config.Settings>;
 
 export function Startup(arg1:context.Context):Promise<void>;
