@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PC Debug</title>
+  </head>
+  <body>
+    <main>
+      <section class="toolbar">
+        <div>
+          <h1>PC Debug</h1>
+          <p>Фоновая диагностика системы и сетевых интерфейсов</p>
+        </div>
+        <button id="refresh" type="button">Обновить</button>
+      </section>
+
+      <section class="panel">
+        <h2>Настройки сбора</h2>
+        <form id="settings">
+          <label>
+            Системные метрики, сек
+            <input id="systemInterval" type="number" min="1" max="3600" step="1">
+          </label>
+          <label>
+            Network status, sec
+            <input id="networkStatusInterval" type="number" min="1" max="3600" step="1">
+          </label>
+          <label>
+            Network probes, sec
+            <input id="networkProbeInterval" type="number" min="1" max="3600" step="1">
+          </label>
+          <label>
+            Network snapshots, sec
+            <input id="networkSnapshotInterval" type="number" min="1" max="3600" step="1">
+          </label>
+          <label class="check">
+            <input id="collectSystem" type="checkbox">
+            Собирать системные метрики
+          </label>
+          <label class="check">
+            <input id="collectNetwork" type="checkbox">
+            Собирать сетевые метрики
+          </label>
+          <button type="submit">Сохранить</button>
+        </form>
+      </section>
+
+      <nav class="tabs" aria-label="Sections">
+        <button class="tab active" type="button" data-tab="network">Network</button>
+        <button class="tab" type="button" data-tab="system">System</button>
+      </nav>
+
+      <section id="networkTab" class="tab-view active">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Network interface</h2>
+            <select id="interfaceSelect"></select>
+          </div>
+          <div id="interfaceList" class="interface-list"></div>
+        </section>
+
+        <section class="health-grid">
+          <article class="panel metric-panel">
+            <h2>Traffic</h2>
+            <div id="trafficSummary" class="metric-list"></div>
+          </article>
+          <article class="panel metric-panel">
+            <h2>Reliability</h2>
+            <div id="reliabilitySummary" class="metric-list"></div>
+          </article>
+          <article class="panel metric-panel">
+            <h2>Configuration</h2>
+            <div id="configSummary" class="metric-list"></div>
+          </article>
+        </section>
+
+        <section class="chart-grid">
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>Gateway latency</h2>
+              <select id="gatewayWindow">
+                <option value="15">15 min</option>
+                <option value="30" selected>30 min</option>
+                <option value="60">1 hour</option>
+              </select>
+            </div>
+            <canvas id="gatewayChart" width="900" height="280"></canvas>
+            <div id="gatewayLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>Traffic rate</h2>
+              <select id="trafficWindow">
+                <option value="15">15 min</option>
+                <option value="30" selected>30 min</option>
+                <option value="60">1 hour</option>
+              </select>
+            </div>
+            <canvas id="trafficChart" width="900" height="280"></canvas>
+            <div id="trafficLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>Errors and drops</h2>
+              <select id="errorsWindow">
+                <option value="15">15 min</option>
+                <option value="30" selected>30 min</option>
+                <option value="60">1 hour</option>
+              </select>
+            </div>
+            <canvas id="errorsChart" width="900" height="280"></canvas>
+            <div id="errorsLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>Сетевые интерфейсы</h2>
+              <select id="networkWindow">
+                <option value="15">15 мин</option>
+                <option value="30" selected>30 мин</option>
+                <option value="60">1 час</option>
+              </select>
+            </div>
+            <canvas id="networkChart" width="900" height="280"></canvas>
+            <div id="networkLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>TCP latency</h2>
+              <select id="tcpWindow">
+                <option value="15">15 min</option>
+                <option value="30" selected>30 min</option>
+                <option value="60">1 hour</option>
+              </select>
+            </div>
+            <canvas id="tcpChart" width="900" height="280"></canvas>
+            <div id="tcpLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>DNS latency</h2>
+              <select id="dnsWindow">
+                <option value="15">15 min</option>
+                <option value="30" selected>30 min</option>
+                <option value="60">1 hour</option>
+              </select>
+            </div>
+            <canvas id="dnsChart" width="900" height="280"></canvas>
+            <div id="dnsLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>HTTP latency</h2>
+              <select id="httpWindow">
+                <option value="15">15 min</option>
+                <option value="30" selected>30 min</option>
+                <option value="60">1 hour</option>
+              </select>
+            </div>
+            <canvas id="httpChart" width="900" height="280"></canvas>
+            <div id="httpLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>HTTP breakdown</h2>
+              <select id="httpBreakdownWindow">
+                <option value="15">15 min</option>
+                <option value="30" selected>30 min</option>
+                <option value="60">1 hour</option>
+              </select>
+            </div>
+            <canvas id="httpBreakdownChart" width="900" height="280"></canvas>
+            <div id="httpBreakdownLegend" class="legend"></div>
+          </article>
+        </section>
+      </section>
+
+      <section id="systemTab" class="tab-view">
+        <section class="health-grid system-summary">
+          <article class="panel metric-panel">
+            <h2>CPU</h2>
+            <div id="cpuSummary" class="metric-list"></div>
+          </article>
+          <article class="panel metric-panel">
+            <h2>Memory</h2>
+            <div id="memorySummary" class="metric-list"></div>
+          </article>
+          <article class="panel metric-panel">
+            <h2>Disk C:</h2>
+            <div id="diskSummary" class="metric-list"></div>
+          </article>
+          <article class="panel metric-panel">
+            <h2>GPU</h2>
+            <div id="gpuSummary" class="metric-list"></div>
+          </article>
+        </section>
+
+        <section class="chart-grid">
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>CPU total</h2>
+              <select id="systemWindow">
+                <option value="15">15 min</option>
+                <option value="30" selected>30 min</option>
+                <option value="60">1 hour</option>
+              </select>
+            </div>
+            <canvas id="cpuChart" width="900" height="280"></canvas>
+            <div id="cpuLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>CPU cores</h2>
+            </div>
+            <canvas id="cpuCoresChart" width="900" height="280"></canvas>
+            <div id="cpuCoresLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>Memory</h2>
+            </div>
+            <canvas id="memoryChart" width="900" height="280"></canvas>
+            <div id="memoryLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>Disk IO</h2>
+            </div>
+            <canvas id="diskIOChart" width="900" height="280"></canvas>
+            <div id="diskIOLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>Disk C: usage</h2>
+            </div>
+            <canvas id="diskUsageChart" width="900" height="280"></canvas>
+            <div id="diskUsageLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>GPU engines</h2>
+            </div>
+            <canvas id="gpuEnginesChart" width="900" height="280"></canvas>
+            <div id="gpuEnginesLegend" class="legend"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-head">
+              <h2>GPU memory</h2>
+            </div>
+            <canvas id="gpuMemoryChart" width="900" height="280"></canvas>
+            <div id="gpuMemoryLegend" class="legend"></div>
+          </article>
+        </section>
+      </section>
+
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
