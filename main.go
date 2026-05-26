@@ -30,7 +30,7 @@ func main() {
 	defer app.Close()
 
 	err = wails.Run(&options.App{
-		Title:  "PC Debug",
+		Title:  "Sosatka PC fix",
 		Width:  1180,
 		Height: 820,
 		AssetServer: &assetserver.Options{

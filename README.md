@@ -1,4 +1,4 @@
-# PC Debug
+# Sosatka PC fix
 
 Local Windows diagnostic desktop app prototype.
 
@@ -19,7 +19,7 @@ $wails = Join-Path (go env GOPATH) 'bin\wails.exe'
 The desktop binary is created at:
 
 ```text
-build\bin\pc-debug.exe
+build\bin\Sosatka PC fix.exe
 ```
 
 ## Current MVP

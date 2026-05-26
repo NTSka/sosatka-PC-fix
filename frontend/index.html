@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>PC Debug</title>
+    <title>Sosatka PC fix</title>
   </head>
   <body>
     <main>
       <section class="toolbar">
         <div>
-          <h1>PC Debug</h1>
+          <h1>Sosatka PC fix</h1>
           <p>Фоновая диагностика системы и сетевых интерфейсов</p>
         </div>
         <button id="refresh" type="button">Обновить</button>
@@ -267,19 +267,39 @@
           </article>
         </section>
 
-        <section class="process-grid">
-          <article class="panel process-panel">
-            <h2>Top CPU</h2>
-            <div id="processCpuTable" class="process-table"></div>
-          </article>
-          <article class="panel process-panel">
-            <h2>Top memory</h2>
-            <div id="processMemoryTable" class="process-table"></div>
-          </article>
-          <article class="panel process-panel">
-            <h2>Top disk IO</h2>
-            <div id="processIOTable" class="process-table"></div>
-          </article>
+        <section class="panel process-panel">
+          <div class="panel-head">
+            <h2>Top offenders for selected period</h2>
+          </div>
+          <div id="processOffendersTable" class="process-table"></div>
+        </section>
+
+        <section class="panel process-panel">
+          <div class="panel-head">
+            <h2 id="selectedProcessTitle">Process history</h2>
+          </div>
+          <section class="chart-grid">
+            <article class="chart-panel">
+              <h2>CPU</h2>
+              <canvas id="processCpuChart" width="900" height="260"></canvas>
+              <div id="processCpuLegend" class="legend"></div>
+            </article>
+            <article class="chart-panel">
+              <h2>Memory</h2>
+              <canvas id="processMemoryChart" width="900" height="260"></canvas>
+              <div id="processMemoryLegend" class="legend"></div>
+            </article>
+            <article class="chart-panel">
+              <h2>Disk IO</h2>
+              <canvas id="processIOChart" width="900" height="260"></canvas>
+              <div id="processIOLegend" class="legend"></div>
+            </article>
+            <article class="chart-panel">
+              <h2>Threads</h2>
+              <canvas id="processThreadsChart" width="900" height="260"></canvas>
+              <div id="processThreadsLegend" class="legend"></div>
+            </article>
+          </section>
         </section>
       </section>
 

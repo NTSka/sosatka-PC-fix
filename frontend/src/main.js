@@ -19,6 +19,10 @@ const els = {
   diskUsageChart: document.querySelector("#diskUsageChart"),
   gpuEnginesChart: document.querySelector("#gpuEnginesChart"),
   gpuMemoryChart: document.querySelector("#gpuMemoryChart"),
+  processCpuChart: document.querySelector("#processCpuChart"),
+  processMemoryChart: document.querySelector("#processMemoryChart"),
+  processIOChart: document.querySelector("#processIOChart"),
+  processThreadsChart: document.querySelector("#processThreadsChart"),
   networkChart: document.querySelector("#networkChart"),
   gatewayChart: document.querySelector("#gatewayChart"),
   trafficChart: document.querySelector("#trafficChart"),
@@ -34,6 +38,10 @@ const els = {
   diskUsageLegend: document.querySelector("#diskUsageLegend"),
   gpuEnginesLegend: document.querySelector("#gpuEnginesLegend"),
   gpuMemoryLegend: document.querySelector("#gpuMemoryLegend"),
+  processCpuLegend: document.querySelector("#processCpuLegend"),
+  processMemoryLegend: document.querySelector("#processMemoryLegend"),
+  processIOLegend: document.querySelector("#processIOLegend"),
+  processThreadsLegend: document.querySelector("#processThreadsLegend"),
   networkLegend: document.querySelector("#networkLegend"),
   gatewayLegend: document.querySelector("#gatewayLegend"),
   trafficLegend: document.querySelector("#trafficLegend"),
@@ -60,9 +68,8 @@ const els = {
   processCpuSummary: document.querySelector("#processCpuSummary"),
   processMemorySummary: document.querySelector("#processMemorySummary"),
   processIOSummary: document.querySelector("#processIOSummary"),
-  processCpuTable: document.querySelector("#processCpuTable"),
-  processMemoryTable: document.querySelector("#processMemoryTable"),
-  processIOTable: document.querySelector("#processIOTable"),
+  processOffendersTable: document.querySelector("#processOffendersTable"),
+  selectedProcessTitle: document.querySelector("#selectedProcessTitle"),
   tabs: document.querySelectorAll("[data-tab]"),
   tabViews: {
     network: document.querySelector("#networkTab"),
@@ -84,6 +91,8 @@ const chartTheme = {
   crosshair: "#94a5bb",
 };
 let selectedInterface = "";
+let selectedProcessIdentity = "";
+let processSort = { key: "score", direction: "desc" };
 const chartStates = new WeakMap();
 const ignoredAnomalies = loadIgnoredAnomalies();
 let currentAnomalies = [];
@@ -366,40 +375,33 @@ function renderSystemSummaries(system) {
 }
 
 function renderProcessSummaries(process) {
-  const cpuRows = topProcessCPURows(process);
-  const memoryRows = topProcessMemoryRows(process);
-  const ioRows = topProcessIORows(process);
+  const offenders = processOffenders(process);
+  if (!offenders.some((row) => row.key === selectedProcessIdentity)) {
+    selectedProcessIdentity = offenders[0]?.key || "";
+  }
+  const selected = offenders.find((row) => row.key === selectedProcessIdentity);
 
   els.processCpuSummary.innerHTML = [
     metricRow("Tracked", String(countProcesses(process))),
-    metricRow("Top", cpuRows[0] ? `${cpuRows[0].name} (${formatPercent(cpuRows[0].cpu)})` : "-"),
+    metricRow("Top avg", offenders[0] ? `${offenders[0].name} (${formatPercent(offenders[0].avgCPU)})` : "-"),
+    metricRow("Top peak", offenders[0] ? formatPercent(offenders[0].maxCPU) : "-"),
     metricRow("Samples", String(process.length)),
   ].join("");
 
   els.processMemorySummary.innerHTML = [
-    metricRow("Top", memoryRows[0] ? `${memoryRows[0].name} (${formatBytes(memoryRows[0].rss)})` : "-"),
-    metricRow("Total tracked", formatBytes(memoryRows.reduce((sum, row) => sum + row.rss, 0))),
-    metricRow("Rows", String(memoryRows.length)),
+    metricRow("Top max", offenders[0] ? `${offenders[0].name} (${formatBytes(offenders[0].maxRSS)})` : "-"),
+    metricRow("Selected", selected ? formatBytes(selected.maxRSS) : "-"),
+    metricRow("Rows", String(offenders.length)),
   ].join("");
 
   els.processIOSummary.innerHTML = [
-    metricRow("Top", ioRows[0] ? `${ioRows[0].name} (${formatRate(ioRows[0].total, "MB/s")})` : "-"),
-    metricRow("Read", formatRate(ioRows.reduce((sum, row) => sum + row.read, 0), "MB/s")),
-    metricRow("Write", formatRate(ioRows.reduce((sum, row) => sum + row.write, 0), "MB/s")),
+    metricRow("Top avg", offenders[0] ? `${offenders[0].name} (${formatRate(offenders[0].avgIO, "MB/s")})` : "-"),
+    metricRow("Top peak", offenders[0] ? formatRate(offenders[0].maxIO, "MB/s") : "-"),
+    metricRow("Selected", selected ? formatRate(selected.maxIO, "MB/s") : "-"),
   ].join("");
 
-  els.processCpuTable.innerHTML = processTable(
-    ["Process", "PID", "CPU", "Threads"],
-    cpuRows.slice(0, 15).map((row) => [row.name, row.pid, formatPercent(row.cpu), formatCount(row.threads)]),
-  );
-  els.processMemoryTable.innerHTML = processTable(
-    ["Process", "PID", "RSS", "Memory %"],
-    memoryRows.slice(0, 15).map((row) => [row.name, row.pid, formatBytes(row.rss), formatPercent(row.memoryPercent)]),
-  );
-  els.processIOTable.innerHTML = processTable(
-    ["Process", "PID", "Read", "Write"],
-    ioRows.slice(0, 15).map((row) => [row.name, row.pid, formatRate(row.read, "MB/s"), formatRate(row.write, "MB/s")]),
-  );
+  els.processOffendersTable.innerHTML = processOffendersTable(sortProcessOffenders(offenders).slice(0, 50), selectedProcessIdentity);
+  renderSelectedProcessHistory(process, selected);
 }
 
 function findAnomalies(system, network) {
@@ -708,6 +710,7 @@ function toRateSeries(points, scale) {
       }
       rates.push({
         ...current,
+        intervalSeconds: seconds,
         value: (delta / seconds) * scale,
       });
     }
@@ -723,84 +726,212 @@ function scaleSeriesValues(points, scale) {
 }
 
 function countProcesses(points) {
-  return new Set(points.map((point) => processKey(point)).filter(Boolean)).size;
+  return new Set(points.map((point) => processIdentity(point)).filter(Boolean)).size;
 }
 
-function topProcessCPURows(points) {
+function processOffenders(points) {
   const cpuRates = toRateSeries(points.filter((point) => point.metric === "process_cpu_seconds"), 100);
-  const latestCPU = latestBySeries(cpuRates, processKey);
-  const latestThreads = latestBySeries(points.filter((point) => point.metric === "process_threads"), processKey);
-  return Array.from(latestCPU.values()).map((point) => {
+  const readRates = toRateSeries(points.filter((point) => point.metric === "process_io_read_bytes"), 1 / 1024 / 1024);
+  const writeRates = toRateSeries(points.filter((point) => point.metric === "process_io_write_bytes"), 1 / 1024 / 1024);
+  const rows = new Map();
+  const ensure = (point) => {
+    const key = processIdentity(point);
+    if (!key) {
+      return null;
+    }
+    if (!rows.has(key)) {
+      const details = parseDetails(point.details);
+      rows.set(key, {
+        avgCPU: NaN,
+        avgIO: NaN,
+        cpuAbove50Seconds: 0,
+        cpuValues: [],
+        exe: details.exe || "",
+        ioByTime: new Map(),
+        key,
+        maxCPU: NaN,
+        maxIO: NaN,
+        maxRSS: NaN,
+        name: processName(details),
+        pids: new Set(),
+        rssValues: [],
+        score: 0,
+      });
+    }
+    const row = rows.get(key);
     const details = parseDetails(point.details);
-    const threads = latestThreads.get(processKey(point));
-    return {
-      cpu: Number(point.value),
-      name: processName(details),
-      pid: details.pid || "-",
-      threads: Number(threads?.value),
-    };
-  }).filter((row) => Number.isFinite(row.cpu)).sort((a, b) => b.cpu - a.cpu);
+    if (details.pid) {
+      row.pids.add(details.pid);
+    }
+    return row;
+  };
+
+  for (const point of cpuRates) {
+    const row = ensure(point);
+    const value = Number(point.value);
+    if (!row || !Number.isFinite(value)) {
+      continue;
+    }
+    row.cpuValues.push(value);
+    if (value >= 50) {
+      row.cpuAbove50Seconds += Number(point.intervalSeconds) || 0;
+    }
+  }
+
+  for (const point of points.filter((item) => item.metric === "process_memory_rss_bytes")) {
+    const row = ensure(point);
+    const value = Number(point.value);
+    if (row && Number.isFinite(value)) {
+      row.rssValues.push(value);
+    }
+  }
+
+  for (const point of readRates.concat(writeRates)) {
+    const row = ensure(point);
+    const value = Number(point.value);
+    if (!row || !Number.isFinite(value)) {
+      continue;
+    }
+    const time = new Date(point.timestamp).getTime();
+    row.ioByTime.set(time, (row.ioByTime.get(time) || 0) + value);
+  }
+
+  return Array.from(rows.values()).map((row) => {
+    const ioValues = Array.from(row.ioByTime.values());
+    row.avgCPU = avg(row.cpuValues);
+    row.maxCPU = max(row.cpuValues);
+    row.maxRSS = max(row.rssValues);
+    row.avgIO = avg(ioValues);
+    row.maxIO = max(ioValues);
+    row.score = (row.avgCPU || 0) * 4 + (row.maxCPU || 0) + (row.avgIO || 0) * 8 + ((row.maxRSS || 0) / 1024 / 1024 / 1024) * 10;
+    row.pidText = Array.from(row.pids).slice(0, 4).join(", ");
+    if (row.pids.size > 4) {
+      row.pidText += ` +${row.pids.size - 4}`;
+    }
+    return row;
+  }).filter((row) => row.cpuValues.length || row.rssValues.length || row.ioByTime.size).sort((a, b) => b.score - a.score);
 }
 
-function topProcessMemoryRows(points) {
-  const latestRSS = latestBySeries(points.filter((point) => point.metric === "process_memory_rss_bytes"), processKey);
-  const latestPct = latestBySeries(points.filter((point) => point.metric === "process_memory_percent"), processKey);
-  return Array.from(latestRSS.values()).map((point) => {
-    const details = parseDetails(point.details);
-    const pct = latestPct.get(processKey(point));
-    return {
-      memoryPercent: Number(pct?.value),
-      name: processName(details),
-      pid: details.pid || "-",
-      rss: Number(point.value),
-    };
-  }).filter((row) => Number.isFinite(row.rss)).sort((a, b) => b.rss - a.rss);
+function renderSelectedProcessHistory(points, selected) {
+  const identity = selected?.key || "";
+  els.selectedProcessTitle.textContent = selected ? `Process history: ${selected.name}` : "Process history";
+  const selectedPoints = points.filter((point) => processIdentity(point) === identity);
+  const cpuRates = toRateSeries(selectedPoints.filter((point) => point.metric === "process_cpu_seconds"), 100);
+  drawInteractiveChart(els.processCpuChart, els.processCpuLegend, groupSeries(cpuRates, processPIDLabel), {
+    min: 0,
+    suffix: "%",
+  });
+  drawInteractiveChart(els.processMemoryChart, els.processMemoryLegend, groupSeries(scaleSeriesValues(selectedPoints.filter((point) => point.metric === "process_memory_rss_bytes"), 1 / 1024 / 1024), processPIDLabel), {
+    min: 0,
+    suffix: " MB",
+  });
+  const ioRates = toRateSeries(selectedPoints.filter((point) => ["process_io_read_bytes", "process_io_write_bytes"].includes(point.metric)), 1 / 1024 / 1024);
+  drawInteractiveChart(els.processIOChart, els.processIOLegend, groupSeries(ioRates, (point) => `${metricLabel(point.metric)} ${processPIDLabel(point)}`), {
+    min: 0,
+    scale: "auto-log",
+    suffix: " MB/s",
+  });
+  drawInteractiveChart(els.processThreadsChart, els.processThreadsLegend, groupSeries(selectedPoints.filter((point) => point.metric === "process_threads"), processPIDLabel), {
+    min: 0,
+    suffix: "",
+  });
 }
 
-function topProcessIORows(points) {
-  const readRates = latestBySeries(toRateSeries(points.filter((point) => point.metric === "process_io_read_bytes"), 1 / 1024 / 1024), processKey);
-  const writeRates = latestBySeries(toRateSeries(points.filter((point) => point.metric === "process_io_write_bytes"), 1 / 1024 / 1024), processKey);
-  const keys = new Set([...readRates.keys(), ...writeRates.keys()]);
-  return Array.from(keys).map((key) => {
-    const readPoint = readRates.get(key);
-    const writePoint = writeRates.get(key);
-    const source = readPoint || writePoint;
-    const details = parseDetails(source?.details);
-    const read = Number(readPoint?.value);
-    const write = Number(writePoint?.value);
-    return {
-      name: processName(details),
-      pid: details.pid || "-",
-      read: Number.isFinite(read) ? read : 0,
-      total: (Number.isFinite(read) ? read : 0) + (Number.isFinite(write) ? write : 0),
-      write: Number.isFinite(write) ? write : 0,
-    };
-  }).filter((row) => row.total > 0).sort((a, b) => b.total - a.total);
-}
-
-function processKey(point) {
+function processIdentity(point) {
   const details = parseDetails(point.details);
-  return details.pid ? `${details.pid}|${details.name || ""}` : "";
+  const name = details.name || "";
+  const exe = details.exe || "";
+  if (name || exe) {
+    return `${name}|${exe}`;
+  }
+  return details.pid ? `pid ${details.pid}` : "";
 }
 
 function processName(details) {
   return details.name || details.exe || `pid ${details.pid || "unknown"}`;
 }
 
-function processTable(headers, rows) {
+function processPIDLabel(point) {
+  const details = parseDetails(point.details);
+  return details.pid ? `PID ${details.pid}` : processName(details);
+}
+
+function processOffendersTable(rows, selectedKey) {
   if (rows.length === 0) {
     return `<p class="empty-state">No process data for selected period</p>`;
   }
+  const headers = [
+    ["name", "Process"],
+    ["pidText", "PIDs"],
+    ["avgCPU", "Avg CPU"],
+    ["maxCPU", "Max CPU"],
+    ["cpuAbove50Seconds", "Time >50%"],
+    ["maxRSS", "Max RAM"],
+    ["avgIO", "Avg IO"],
+    ["maxIO", "Max IO"],
+  ];
   return `
     <table>
       <thead>
-        <tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr>
+        <tr>${headers.map(([key, label]) => `
+          <th>
+            <button class="table-sort ${processSort.key === key ? "active" : ""}" type="button" data-process-sort="${escapeHtml(key)}">
+              ${escapeHtml(label)}${processSort.key === key ? `<span>${processSort.direction === "asc" ? "↑" : "↓"}</span>` : ""}
+            </button>
+          </th>
+        `).join("")}</tr>
       </thead>
       <tbody>
-        ${rows.map((row) => `<tr>${row.map((value) => `<td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}
+        ${rows.map((row) => `
+          <tr class="${row.key === selectedKey ? "active" : ""}" data-process-key="${escapeHtml(row.key)}" title="${escapeHtml(row.exe || row.name)}">
+            <td>${escapeHtml(row.name)}</td>
+            <td>${escapeHtml(row.pidText || "-")}</td>
+            <td>${escapeHtml(formatPercent(row.avgCPU))}</td>
+            <td>${escapeHtml(formatPercent(row.maxCPU))}</td>
+            <td>${escapeHtml(formatDuration(row.cpuAbove50Seconds))}</td>
+            <td>${escapeHtml(formatBytes(row.maxRSS))}</td>
+            <td>${escapeHtml(formatRate(row.avgIO, "MB/s"))}</td>
+            <td>${escapeHtml(formatRate(row.maxIO, "MB/s"))}</td>
+          </tr>
+        `).join("")}
       </tbody>
     </table>
   `;
+}
+
+function sortProcessOffenders(rows) {
+  const direction = processSort.direction === "asc" ? 1 : -1;
+  return rows.map((row) => ({ ...row })).sort((a, b) => compareProcessRows(a, b, processSort.key) * direction);
+}
+
+function compareProcessRows(a, b, key) {
+  const left = a[key];
+  const right = b[key];
+  if (typeof left === "string" || typeof right === "string") {
+    return String(left || "").localeCompare(String(right || ""), undefined, { numeric: true, sensitivity: "base" });
+  }
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  if (!Number.isFinite(leftNumber) && !Number.isFinite(rightNumber)) {
+    return 0;
+  }
+  if (!Number.isFinite(leftNumber)) {
+    return -1;
+  }
+  if (!Number.isFinite(rightNumber)) {
+    return 1;
+  }
+  return leftNumber - rightNumber;
+}
+
+function avg(values) {
+  const nums = values.filter(Number.isFinite);
+  return nums.length ? nums.reduce((sum, value) => sum + value, 0) / nums.length : NaN;
+}
+
+function max(values) {
+  const nums = values.filter(Number.isFinite);
+  return nums.length ? Math.max(...nums) : NaN;
 }
 
 function summarizeSnapshots(samples, interfaceName, network) {
@@ -986,6 +1117,19 @@ function formatMs(value) {
   return Number.isFinite(value) ? `${value.toFixed(1)} ms` : "-";
 }
 
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "-";
+  }
+  if (seconds >= 3600) {
+    return `${(seconds / 3600).toFixed(1)} h`;
+  }
+  if (seconds >= 60) {
+    return `${(seconds / 60).toFixed(1)} min`;
+  }
+  return `${Math.round(seconds)} sec`;
+}
+
 function trafficLabel(point) {
   return point.metric === "bytes_recv" ? "RX" : point.metric === "bytes_sent" ? "TX" : point.metric;
 }
@@ -1143,6 +1287,8 @@ function metricLabel(metric) {
     gpu_engine_utilization: "GPU engine",
     gpu_dedicated_bytes: "Dedicated",
     gpu_shared_bytes: "Shared",
+    process_io_read_bytes: "Read",
+    process_io_write_bytes: "Write",
     gateway_ping_ms: "Gateway",
     tcp_connect_ms: "TCP",
     dns_query_ms: "DNS",
@@ -1661,6 +1807,24 @@ els.anomalyList.addEventListener("click", (event) => {
     return;
   }
   toggleIgnoredAnomaly(button.dataset.anomalyAction, button.dataset.anomalyKey);
+});
+els.processOffendersTable.addEventListener("click", (event) => {
+  const sortButton = event.target.closest("[data-process-sort]");
+  if (sortButton) {
+    const key = sortButton.dataset.processSort;
+    processSort = {
+      key,
+      direction: processSort.key === key && processSort.direction === "desc" ? "asc" : "desc",
+    };
+    loadCharts();
+    return;
+  }
+  const row = event.target.closest("[data-process-key]");
+  if (!row) {
+    return;
+  }
+  selectedProcessIdentity = row.dataset.processKey;
+  loadCharts();
 });
 els.interfaceSelect.addEventListener("change", () => {
   selectedInterface = els.interfaceSelect.value;

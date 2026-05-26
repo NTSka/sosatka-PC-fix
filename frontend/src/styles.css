@@ -411,12 +411,51 @@ select {
   font-weight: 600;
 }
 
+.table-sort {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: #91a0b4;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 600;
+  gap: 5px;
+  justify-content: flex-start;
+  min-height: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.table-sort:hover,
+.table-sort.active {
+  background: transparent;
+  color: #f3f7fc;
+}
+
+.table-sort span {
+  color: #78a6ff;
+  font-size: 11px;
+}
+
 .process-table td:first-child {
   color: #f3f7fc;
   font-weight: 600;
-  max-width: 170px;
+  max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.process-table tbody tr {
+  cursor: pointer;
+}
+
+.process-table tbody tr:hover {
+  background: #182334;
+}
+
+.process-table tbody tr.active {
+  background: #142033;
+  box-shadow: inset 3px 0 0 #4f8cff;
 }
 
 .metric-panel h2 {
