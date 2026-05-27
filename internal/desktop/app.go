@@ -91,3 +91,27 @@ func (a *App) SeriesRange(kind string, from string, to string) ([]storage.Series
 	}
 	return a.store.SeriesRange(context.Background(), start.UTC(), end.UTC(), kind)
 }
+
+func (a *App) SeriesRollup(kind string, from string, to string, bucketSeconds int) ([]storage.SeriesPoint, error) {
+	start, err := time.Parse(time.RFC3339, from)
+	if err != nil {
+		return nil, err
+	}
+	end, err := time.Parse(time.RFC3339, to)
+	if err != nil {
+		return nil, err
+	}
+	if end.Before(start) {
+		start, end = end, start
+	}
+	if end.Sub(start) > 24*time.Hour {
+		start = end.Add(-24 * time.Hour)
+	}
+	if bucketSeconds < 1 {
+		bucketSeconds = 1
+	}
+	if bucketSeconds > 3600 {
+		bucketSeconds = 3600
+	}
+	return a.store.SeriesRollup(context.Background(), start.UTC(), end.UTC(), kind, time.Duration(bucketSeconds)*time.Second)
+}

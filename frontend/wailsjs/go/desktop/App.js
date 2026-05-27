@@ -26,6 +26,10 @@ export function SeriesRange(arg1, arg2, arg3) {
   return window['go']['desktop']['App']['SeriesRange'](arg1, arg2, arg3);
 }
 
+export function SeriesRollup(arg1, arg2, arg3, arg4) {
+  return window['go']['desktop']['App']['SeriesRollup'](arg1, arg2, arg3, arg4);
+}
+
 export function SetSettings(arg1) {
   return window['go']['desktop']['App']['SetSettings'](arg1);
 }

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"embed"
+	"errors"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -117,15 +119,69 @@ func (t *trayController) onReady() {
 }
 
 func appDataDir() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
 
-	dir := filepath.Join(base, "pc-debug")
+	dir := filepath.Join(base, "Sosatka PC fix")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 
+	if err := migrateLegacyDataDir(dir); err != nil {
+		return "", err
+	}
+
 	return dir, nil
+}
+
+func migrateLegacyDataDir(newDir string) error {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return nil
+	}
+
+	legacyDB := filepath.Join(configDir, "pc-debug", "pc-debug.db")
+	newDB := filepath.Join(newDir, "sosatka-pc-fix.db")
+	if fileExists(newDB) || !fileExists(legacyDB) {
+		return nil
+	}
+
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := copyFileIfExists(legacyDB+suffix, newDB+suffix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFileIfExists(source string, target string) error {
+	in, err := os.Open(source)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

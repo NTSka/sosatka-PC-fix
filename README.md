@@ -26,7 +26,7 @@ build\bin\Sosatka PC fix.exe
 
 - Separate configurable collection intervals for system and network metrics.
 - Defaults: `5` seconds for system metrics, `5` seconds for network status, `15` seconds for active network probes, and `60` seconds for network snapshots.
-- Local SQLite storage in `%AppData%\pc-debug\pc-debug.db`.
+- Local SQLite storage in `%LocalAppData%\Sosatka PC fix\sosatka-pc-fix.db`.
 - Wails desktop UI with settings, charts, and recent samples.
 - Network collection records each local interface separately, including VPN and virtual adapters.
 - Cheap interface counters are collected per interface: bytes, packets, errors, and drops.

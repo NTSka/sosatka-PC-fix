@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"math"
 	"path/filepath"
 	"sync"
 	"time"
@@ -39,7 +40,7 @@ type SeriesPoint struct {
 }
 
 func Open(dataDir string) (*Store, error) {
-	db, err := sql.Open("sqlite", filepath.Join(dataDir, "pc-debug.db"))
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "sosatka-pc-fix.db"))
 	if err != nil {
 		return nil, err
 	}
@@ -240,4 +241,116 @@ WHERE timestamp >= ? AND timestamp <= ? AND value IS NOT NULL
 	}
 
 	return points, rows.Err()
+}
+
+func (s *Store) SeriesRollup(ctx context.Context, from time.Time, to time.Time, kind string, bucket time.Duration) ([]SeriesPoint, error) {
+	if bucket <= 0 {
+		return s.SeriesRange(ctx, from, to, kind)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+	WITH bucketed AS (
+	SELECT
+		CAST((CAST(strftime('%s', substr(timestamp, 1, 19)) AS INTEGER) / ?) AS INTEGER) AS bucket_id,
+		kind,
+		COALESCE(interface_id, '') AS interface_id,
+		metric,
+		COALESCE(unit, '') AS unit,
+		COALESCE(details, '') AS details,
+		value,
+		timestamp,
+		id
+	FROM samples
+	WHERE timestamp >= ? AND timestamp <= ? AND value IS NOT NULL
+`
+	args := []any{int64(bucket.Seconds()), from, to}
+	if kind != "" {
+		query += ` AND kind = ?`
+		args = append(args, kind)
+	}
+	query += `
+),
+aggregated AS (
+	SELECT
+		bucket_id,
+		kind,
+		interface_id,
+		metric,
+		unit,
+		details,
+		MIN(value) AS min_value,
+		MAX(value) AS max_value,
+		AVG(value) AS avg_value,
+		MAX(timestamp || printf('%020d', id)) AS last_key
+	FROM bucketed
+	GROUP BY bucket_id, kind, interface_id, metric, unit, details
+)
+SELECT
+	aggregated.bucket_id * ? AS bucket_timestamp,
+	aggregated.kind,
+	aggregated.interface_id,
+	aggregated.metric,
+	aggregated.unit,
+	aggregated.details,
+	aggregated.min_value,
+	aggregated.max_value,
+	aggregated.avg_value,
+	bucketed.value AS last_value
+FROM aggregated
+JOIN bucketed ON
+	bucketed.bucket_id = aggregated.bucket_id AND
+	bucketed.kind = aggregated.kind AND
+	bucketed.interface_id = aggregated.interface_id AND
+	bucketed.metric = aggregated.metric AND
+	bucketed.unit = aggregated.unit AND
+	bucketed.details = aggregated.details AND
+	bucketed.timestamp || printf('%020d', bucketed.id) = aggregated.last_key
+ORDER BY bucket_timestamp ASC
+`
+	args = append(args, int64(bucket.Seconds()))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var points []SeriesPoint
+	for rows.Next() {
+		var unixSeconds int64
+		var point SeriesPoint
+		var minValue float64
+		var maxValue float64
+		var avgValue float64
+		var lastValue float64
+		if err := rows.Scan(&unixSeconds, &point.Kind, &point.InterfaceID, &point.Metric, &point.Unit, &point.Details, &minValue, &maxValue, &avgValue, &lastValue); err != nil {
+			return nil, err
+		}
+		ts := time.Unix(unixSeconds, 0).UTC()
+		points = appendRollupPoint(points, ts, point, minValue)
+		if !sameFloat(maxValue, minValue) {
+			points = appendRollupPoint(points, ts.Add(bucket/3), point, maxValue)
+		}
+		if !sameFloat(avgValue, minValue) && !sameFloat(avgValue, maxValue) {
+			points = appendRollupPoint(points, ts.Add((bucket*2)/3), point, avgValue)
+		}
+		if !sameFloat(lastValue, minValue) && !sameFloat(lastValue, maxValue) && !sameFloat(lastValue, avgValue) {
+			points = appendRollupPoint(points, ts.Add(bucket-time.Millisecond), point, lastValue)
+		}
+	}
+
+	return points, rows.Err()
+}
+
+func appendRollupPoint(points []SeriesPoint, ts time.Time, base SeriesPoint, value float64) []SeriesPoint {
+	base.Timestamp = ts.UTC()
+	base.Value = value
+	return append(points, base)
+}
+
+func sameFloat(a float64, b float64) bool {
+	return math.Abs(a-b) < 0.000001
 }

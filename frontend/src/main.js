@@ -1,5 +1,5 @@
 import "./styles.css";
-import { GetSettings, RecentSnapshots, SeriesRange, SetSettings } from "../wailsjs/go/desktop/App";
+import { GetSettings, RecentSnapshots, SeriesRange, SeriesRollup, SetSettings } from "../wailsjs/go/desktop/App";
 
 const els = {
   form: document.querySelector("#settings"),
@@ -80,6 +80,7 @@ const els = {
 };
 
 const colors = ["#78a6ff", "#f6bd60", "#5dd39e", "#ff6b8a", "#c084fc", "#4dd0e1", "#f28482", "#b8c0ff"];
+const maxPointsPerChartPixel = 2;
 const chartTheme = {
   background: "#101720",
   grid: "#2d3a4c",
@@ -93,6 +94,8 @@ const chartTheme = {
 let selectedInterface = "";
 let selectedProcessIdentity = "";
 let processSort = { key: "score", direction: "desc" };
+let chartLoadInFlight = false;
+let chartLoadPending = false;
 const chartStates = new WeakMap();
 const ignoredAnomalies = loadIgnoredAnomalies();
 let currentAnomalies = [];
@@ -178,18 +181,65 @@ function syncTimelineRangeInputs() {
 }
 
 async function loadCharts() {
+  if (chartLoadInFlight) {
+    chartLoadPending = true;
+    return;
+  }
+  chartLoadInFlight = true;
+  chartLoadPending = false;
+  try {
+    await loadActiveTabCharts();
+  } finally {
+    chartLoadInFlight = false;
+  }
+  if (chartLoadPending) {
+    chartLoadPending = false;
+    loadCharts();
+  }
+}
+
+async function loadActiveTabCharts() {
   const range = timelineRange();
-  const [system, network, process, snapshots] = await Promise.all([
-    SeriesRange("system", range.from.toISOString(), range.to.toISOString()),
-    SeriesRange("network", range.from.toISOString(), range.to.toISOString()),
-    SeriesRange("process", range.from.toISOString(), range.to.toISOString()),
+  const tab = activeTabName();
+  const from = range.from.toISOString();
+  const to = range.to.toISOString();
+  const bucketSeconds = rollupBucketSeconds(range);
+
+  if (tab === "system") {
+    const system = await SeriesRollup("system", from, to, bucketSeconds);
+    renderSystemSummaries(system);
+    renderSystemCharts(system);
+    return;
+  }
+
+  if (tab === "processes") {
+    const process = await SeriesRollup("process", from, to, bucketSeconds);
+    renderProcessSummaries(process);
+    return;
+  }
+
+  if (tab === "anomalies") {
+    const [system, network] = await Promise.all([
+      SeriesRange("system", from, to),
+      SeriesRange("network", from, to),
+    ]);
+    renderAnomalies(findAnomalies(system, network));
+    return;
+  }
+
+  const [network, snapshots] = await Promise.all([
+    SeriesRollup("network", from, to, bucketSeconds),
     RecentSnapshots(40),
   ]);
+  renderNetworkCharts(network, snapshots);
+}
 
-  renderSystemSummaries(system);
-  renderProcessSummaries(process);
-  renderAnomalies(findAnomalies(system, network));
+function rollupBucketSeconds(range) {
+  const seconds = Math.max(1, (range.to.getTime() - range.from.getTime()) / 1000);
+  return Math.max(1, Math.ceil(seconds / 900));
+}
 
+function renderSystemCharts(system) {
   drawInteractiveChart(els.cpuChart, els.cpuLegend, groupSeries(system.filter((point) => point.metric === "cpu_total"), systemSeriesLabel), {
     min: 0,
     max: 100,
@@ -225,7 +275,9 @@ async function loadCharts() {
     min: 0,
     suffix: " GB",
   });
+}
 
+function renderNetworkCharts(network, snapshots) {
   const interfacePoints = filterByMetric(network, "interface_up");
   const interfaces = buildInterfaceSummaries(interfacePoints, network);
   renderInterfaceSelector(interfaces);
@@ -291,6 +343,10 @@ async function loadCharts() {
     scale: "auto-log",
     suffix: " ms",
   });
+}
+
+function activeTabName() {
+  return Array.from(els.tabs).find((tab) => tab.classList.contains("active"))?.dataset.tab || "network";
 }
 
 function renderHealthSummaries(network, snapshots) {
@@ -434,6 +490,7 @@ function findAnomalies(system, network) {
         anomalies.push({
           category: "network",
           detail: `${item.label}: max ${formatMs(max)}, p90 ${formatMs(p90)}`,
+          ignoreClass: `network|${metric}|latency-spike|${item.key}`,
           severity: max >= 1000 ? "critical" : "warning",
           title: `${metricLabel(metric)} latency spike`,
         });
@@ -453,6 +510,7 @@ function findAnomalies(system, network) {
         anomalies.push({
           category: "network",
           detail: `${item.label}: ${Math.round(rate * 100)}% success over ${values.length} probes`,
+          ignoreClass: `network|${metric}|failures|${item.key}`,
           severity: rate < 0.8 ? "critical" : "warning",
           title: `${metricLabel(metric)} failures`,
         });
@@ -466,6 +524,7 @@ function findAnomalies(system, network) {
       anomalies.push({
         category: "network",
         detail: `${name} is down`,
+        ignoreClass: `network|interface-down|${name}`,
         severity: "warning",
         title: "Network interface down",
       });
@@ -479,6 +538,7 @@ function findAnomalies(system, network) {
     anomalies.push({
       category: "network",
       detail: `${worst.interface_id || "unknown"} ${worst.metric}: ${formatRate(worst.value, "/s")}`,
+      ignoreClass: `network|errors-drops|${worst.interface_id || "unknown"}|${worst.metric}`,
       severity: Number(worst.value) >= 5 ? "critical" : "warning",
       title: "Network errors or drops detected",
     });
@@ -513,7 +573,7 @@ function renderAnomalies(anomalies) {
 }
 
 function anomalyKey(item) {
-  return `${item.category}|${item.title}|${item.detail}`;
+  return item.ignoreClass || `${item.category}|${item.title}`;
 }
 
 function loadIgnoredAnomalies() {
@@ -549,6 +609,7 @@ function addThresholdAnomaly(anomalies, category, title, value, warning, critica
   anomalies.push({
     category,
     detail: `${formatAnomalyValue(value, suffix)} current, warning >= ${formatAnomalyValue(warning, suffix)}, critical >= ${formatAnomalyValue(critical, suffix)}`,
+    ignoreClass: `${category}|${title}`,
     severity: value >= critical ? "critical" : "warning",
     title,
   });
@@ -566,13 +627,15 @@ function severityRank(severity) {
 function seriesGroups(points, labelFor) {
   const groups = new Map();
   for (const point of points) {
-    const label = labelFor(point);
+    const labelInfo = labelFor(point);
+    const label = typeof labelInfo === "object" ? labelInfo.label : labelInfo;
+    const key = typeof labelInfo === "object" ? labelInfo.key : label;
     if (!groups.has(label)) {
-      groups.set(label, []);
+      groups.set(label, { key, label, points: [] });
     }
-    groups.get(label).push(point);
+    groups.get(label).points.push(point);
   }
-  return Array.from(groups, ([label, grouped]) => ({ label, points: grouped }));
+  return Array.from(groups.values());
 }
 
 function latestBySeries(points, labelFor) {
@@ -1268,6 +1331,7 @@ function groupSeries(points, labelFor) {
   return Array.from(grouped, ([label, values], index) => ({
     label,
     color: colors[index % colors.length],
+    rawValues: values,
     values,
   }));
 }
@@ -1344,7 +1408,10 @@ function anomalyNetworkLabel(point) {
   const iface = point.interface_id || "unknown interface";
   const source = details.source_ip ? ` (${details.source_ip})` : "";
   const target = details.target || details.gateway || point.metric;
-  return `${iface}${source} -> ${target}`;
+  return {
+    key: `${iface}|${details.source_ip || ""}|${target}`,
+    label: `${iface}${source} -> ${target}`,
+  };
 }
 
 function parseDetails(details) {
@@ -1448,7 +1515,7 @@ function drawInteractiveChart(canvas, legend, series, options) {
   setupChartInteractions(canvas);
   const state = createChartState(canvas, legend, series, options, null);
   chartStates.set(canvas, state);
-  renderChart(state);
+  renderChart(state, true);
 }
 
 function setupChartInteractions(canvas) {
@@ -1469,7 +1536,7 @@ function setupChartInteractions(canvas) {
     });
     const next = { ...state, hover };
     chartStates.set(canvas, next);
-    renderChart(next);
+    requestChartRender(canvas, false);
   });
 
   canvas.addEventListener("mouseleave", () => {
@@ -1479,7 +1546,21 @@ function setupChartInteractions(canvas) {
     }
     const next = { ...state, hover: null };
     chartStates.set(canvas, next);
-    renderChart(next);
+    requestChartRender(canvas, false);
+  });
+}
+
+function requestChartRender(canvas, updateLegend) {
+  if (canvas.dataset.renderPending === "true") {
+    return;
+  }
+  canvas.dataset.renderPending = "true";
+  requestAnimationFrame(() => {
+    canvas.dataset.renderPending = "false";
+    const latest = chartStates.get(canvas);
+    if (latest) {
+      renderChart(latest, updateLegend);
+    }
   });
 }
 
@@ -1489,15 +1570,17 @@ function createChartState(canvas, legend, series, options, hover) {
   const pad = { left: 64, right: 18, top: 18, bottom: 32 };
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
-  const all = series.flatMap((s) => s.values);
+  const displaySeries = downsampleChartSeries(series, Math.max(160, Math.floor(plotW * maxPointsPerChartPixel)), options);
+  const all = displaySeries.flatMap((s) => s.values);
+  const rawAll = series.flatMap((s) => s.rawValues || s.values);
 
   let minTime = 0;
   let maxTime = 1;
   let minValue = options.min ?? 0;
   let maxValue = options.max ?? 1;
-  if (all.length > 0) {
-    minTime = Math.min(...all.map((p) => p.time));
-    maxTime = Math.max(...all.map((p) => p.time));
+  if (rawAll.length > 0) {
+    minTime = Math.min(...rawAll.map((p) => p.time));
+    maxTime = Math.max(...rawAll.map((p) => p.time));
     minValue = options.min ?? Math.min(...all.map((p) => p.value));
     maxValue = options.max ?? Math.max(...all.map((p) => p.value));
   }
@@ -1512,10 +1595,72 @@ function createChartState(canvas, legend, series, options, hover) {
   }
   const scale = createValueScale(all.map((point) => point.value), minValue, maxValue, options, pad, plotH);
 
-  return { all, canvas, ctx, height, hover, legend, maxTime, maxValue, minTime, minValue, options, pad, plotH, plotW, scale, series, width };
+  return { all, canvas, ctx, height, hover, legend, maxTime, maxValue, minTime, minValue, options, pad, plotH, plotW, scale, series: displaySeries, width };
 }
 
-function renderChart(state) {
+function downsampleChartSeries(series, maxPoints, options) {
+  return series.map((item) => {
+    const rawValues = item.rawValues || item.values;
+    const values = downsampleValues(rawValues, maxPoints, Boolean(options.step));
+    return {
+      ...item,
+      rawValues,
+      values,
+    };
+  });
+}
+
+function downsampleValues(values, maxPoints, step) {
+  if (values.length <= maxPoints) {
+    return values;
+  }
+  if (step) {
+    return downsampleLastPerBucket(values, maxPoints);
+  }
+  return downsampleMinMaxPerBucket(values, maxPoints);
+}
+
+function downsampleLastPerBucket(values, maxPoints) {
+  const sorted = [...values].sort((a, b) => a.time - b.time);
+  const bucketSize = Math.ceil(sorted.length / maxPoints);
+  const result = [];
+  for (let i = 0; i < sorted.length; i += bucketSize) {
+    result.push(sorted[Math.min(sorted.length - 1, i + bucketSize - 1)]);
+  }
+  return result;
+}
+
+function downsampleMinMaxPerBucket(values, maxPoints) {
+  const sorted = [...values].sort((a, b) => a.time - b.time);
+  const bucketCount = Math.max(1, Math.floor(maxPoints / 2));
+  const bucketSize = Math.ceil(sorted.length / bucketCount);
+  const result = [];
+
+  for (let i = 0; i < sorted.length; i += bucketSize) {
+    const bucket = sorted.slice(i, i + bucketSize);
+    if (bucket.length === 0) {
+      continue;
+    }
+    let minPoint = bucket[0];
+    let maxPoint = bucket[0];
+    for (const point of bucket) {
+      if (point.value < minPoint.value) {
+        minPoint = point;
+      }
+      if (point.value > maxPoint.value) {
+        maxPoint = point;
+      }
+    }
+    if (minPoint.time <= maxPoint.time) {
+      result.push(minPoint, maxPoint);
+    } else {
+      result.push(maxPoint, minPoint);
+    }
+  }
+  return result.filter((point, index, arr) => index === 0 || point.time !== arr[index - 1].time || point.value !== arr[index - 1].value);
+}
+
+function renderChart(state, updateLegend = false) {
   const { ctx, width, height, pad, plotW, plotH, minTime, maxTime, options, series, all, hover, legend, scale } = state;
 
   ctx.clearRect(0, 0, width, height);
@@ -1557,11 +1702,13 @@ function renderChart(state) {
   if (hover) {
     drawHover(state);
   }
-  legend.innerHTML = series.map((item) => legendItem(item, options)).join("");
+  if (updateLegend) {
+    legend.innerHTML = series.map((item) => legendItem(item, options)).join("");
+  }
 }
 
 function legendItem(item, options) {
-  const stats = seriesStats(item.values);
+  const stats = seriesStats(item.rawValues || item.values);
   return `
     <span class="legend-item" title="${escapeHtml(item.label)}">
       <span class="legend-swatch" style="background:${item.color}"></span>
@@ -1698,8 +1845,8 @@ function createValueScale(values, minValue, maxValue, options, pad, plotH) {
     };
   }
 
-  const min = Math.max(1, Math.min(...positive) * 0.8);
-  const max = Math.max(min * 1.1, maxValue);
+  const min = niceLogFloor(Math.max(0.1, Math.min(...positive) * 0.8));
+  const max = Math.max(niceLogCeil(maxValue), min * 10);
   const logMin = Math.log10(min);
   const logMax = Math.log10(max);
   return {
@@ -1743,10 +1890,49 @@ function logTicks(min, max) {
       }
     }
   }
-  if (!result.includes(max)) {
-    result.push(max);
+  return limitLogTicks(result.reverse(), 6);
+}
+
+function niceLogFloor(value) {
+  const power = Math.floor(Math.log10(value));
+  const base = Math.pow(10, power);
+  const normalized = value / base;
+  if (normalized >= 5) {
+    return 5 * base;
   }
-  return result.slice(-6).reverse();
+  if (normalized >= 2) {
+    return 2 * base;
+  }
+  return base;
+}
+
+function niceLogCeil(value) {
+  const power = Math.floor(Math.log10(value));
+  const base = Math.pow(10, power);
+  const normalized = value / base;
+  if (normalized <= 1) {
+    return base;
+  }
+  if (normalized <= 2) {
+    return 2 * base;
+  }
+  if (normalized <= 5) {
+    return 5 * base;
+  }
+  return 10 * base;
+}
+
+function limitLogTicks(ticks, limit) {
+  if (ticks.length <= limit) {
+    return ticks;
+  }
+  const step = Math.ceil(ticks.length / limit);
+  const result = ticks.filter((_, index) => index % step === 0);
+  const last = ticks.at(-1);
+  if (!result.includes(last)) {
+    result.push(last);
+  }
+  return result;
 }
 
 function roundRect(ctx, x, y, width, height, radius) {
